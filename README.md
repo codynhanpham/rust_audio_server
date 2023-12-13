@@ -7,7 +7,7 @@ Designed and **tested** to be compatible with Linux (Ubuntu 14.04 +) and Windows
 ### Server
 The server must have some audio output device, such as speakers or headphones, connected to it.
 
-To start the server, simply launch the executable included in the [release page](https://github.com/codynhanpham/rust-audio-server/releases) with the following command:
+To start the server, simply launch the executable included in the [release page](https://github.com/codynhanpham/rust_audio_server/releases) with the following command:
 ```bash
 ./start-audio-server # Linux
 start-audio-server.exe # Windows

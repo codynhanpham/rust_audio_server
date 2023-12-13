@@ -258,7 +258,9 @@ async fn main() -> std::io::Result<()> {
 
 
     // start the server
-    println!("Server running at http://127.0.0.1:5055/\n\n");
+    let host_ip = local_ip().unwrap();
+    let host_ip = host_ip.to_string();
+    println!("Server running at http://{}:5055/\n\n", host_ip);
     HttpServer::new(move || {
         App::new()
             .app_data(audio_files.clone())

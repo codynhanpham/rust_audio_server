@@ -108,21 +108,31 @@ async fn play(audio_files: web::Data<AudioFiles> , audio_file_name: web::Path<St
     let source = audio_files.files.get(&audio_file_name); // find decoded audio file by name
 
     // if the audio file is not found, return 404
-    if let None = source {
+    if source.is_none() {
         println!("\x1b[2m    \x1b[38;5;8mAudio file Not Found\x1b[0m");
         let message = format!("Audio file {} not found", audio_file_name);
         return HttpResponse::NotFound().json(ResponseMessage { message });
     }
 
-    // if the audio file is found, try to play it
-    let source = source.unwrap();
-    let (_stream, stream_handle) = OutputStream::try_default().unwrap();
-    let sink = Sink::try_new(&stream_handle).unwrap();
-    sink.append(source.clone()); // init the sink with the audio file
+    let output_stream_result = OutputStream::try_default();
+    if output_stream_result.is_err() {
+        println!("\x1b[2m    \x1b[31;5;8mError: Could not create OutputStream. Is there any audio output device available?\x1b[0m");
+        return HttpResponse::InternalServerError().finish();
+    }
+
+    let (_stream, stream_handle) = output_stream_result.unwrap();
+    let sink_result = Sink::try_new(&stream_handle);
+    if sink_result.is_err() {
+        println!("\x1b[2m    \x1b[31;5;8mError: Could not create Sink. Is there any audio output device available?\x1b[0m");
+        return HttpResponse::InternalServerError().finish();
+    }
+
+    let sink = sink_result.unwrap();
+    sink.append(source.unwrap().clone()); // init the sink with the audio file
     let time_start_nano = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
     
     println!("\x1b[2m    \x1b[38;5;8m{}: Started {}...\x1b[0m", time_start_nano, audio_file_name);
-    sink.sleep_until_end(); // play the audio file synchronously. this thread will be blocked until the audio file is finished playing.
+    sink.sleep_until_end(); // play the audio file synchronously. this thread will be blocked until the audio file has finished playing.
     println!("\x1b[2m    \x1b[38;5;8mFinished (job at {})\x1b[0m", time_start_nano);
 
     let message = format!("At {} played {}", time_start_nano, audio_file_name);
@@ -140,13 +150,12 @@ async fn play(audio_files: web::Data<AudioFiles> , audio_file_name: web::Path<St
         .unwrap();
     if let Err(e) = writeln!(file, "{},{},{}", time_start_nano, audio_file_name, "success") {
         eprintln!("Couldn't write to file: {}", e);
+    } else {
+        println!("\x1b[2m    \x1b[38;5;8mAppended to log file: {}\x1b[0m", *log_file_name);
     }
-    println!("\x1b[2m    \x1b[38;5;8mAppended to log file: {}\x1b[0m", *log_file_name);
 
-    drop(log_file_name);
-    drop(file);
-
-    // NOT IMPLEMENTED: return error if server cannot play the audio file for some reason
+    drop(log_file_name); // release the lock
+    drop(file); // release the lock
 
     HttpResponse::Ok().json(ResponseMessage { message })
 }
@@ -167,12 +176,15 @@ async fn start_new_log() -> impl Responder {
         .create(true)
         .open(format!("{}.csv", *log_file_name))
         .unwrap();
+    let mut message = format!("Started new log file: ./{}.csv", *log_file_name);
+    drop(log_file_name);
+
     if let Err(e) = writeln!(file, "timestamp,audio_filename,status") {
         eprintln!("Couldn't create new file: {}", e);
+
+        message = format!("Error: Couldn't create new file: {}", e);
     }
 
-    let message = format!("Started new log file: ./{}.csv", *log_file_name);
-    drop(log_file_name);
     drop(file);
 
     println!("\x1b[2m    \x1b[38;5;8m{}\x1b[0m", message);
@@ -250,8 +262,9 @@ async fn main() -> std::io::Result<()> {
         .unwrap();
     if let Err(e) = writeln!(file, "Timestamp,Audio File Name,Status") {
         eprintln!("Couldn't create new file: {}", e);
+    } else {
+        println!("Started new log file: ./{}.csv\n", *log_file_name);
     }
-    println!("Started new log file: ./{}.csv\n", *log_file_name);
 
     drop(log_file_name); // release the lock
     drop(file); // release the lock

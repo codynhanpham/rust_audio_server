@@ -9,6 +9,7 @@ use std::sync::{Arc, Mutex};
 use chrono::Utc;
 use std::fs::OpenOptions;
 use std::io::Write;
+use local_ip_address::local_ip;
 
 // Define the global variable for the log file name
 // This will be updated whenever a new /startnewlog request is received
@@ -30,6 +31,20 @@ struct AudioFiles {
 // Returns a HashMap of audio file names and their corresponding Buffered<Decoder<BufReader<std::fs::File>>> objects
 fn preload_audio_files(audio_folder_path: &str) -> HashMap<String, Buffered<Decoder<BufReader<std::fs::File>>>> {
     println!("Preloading audio files...");
+
+    // check if the audio folder exists, if not, display an error message and exit
+    if !fs::metadata(audio_folder_path).is_ok() {
+        println!("\x1b[2m    \x1b[38;5;8mError: Audio folder not found\x1b[0m");
+        println!("Please create a folder named \"audio\" in the same directory as this executable and put your audio files in it.");
+
+        // wait for user hitting enter before exiting
+        println!("\n\n(Press Enter to exit)");
+        let mut input = String::new();
+        std::io::stdin().read_line(&mut input).unwrap();
+
+        std::process::exit(1);
+    }
+
     let mut files = HashMap::new();
     let paths = fs::read_dir(audio_folder_path).unwrap();
     let audio_extensions = vec!["mp3", "wav", "flac", "ogg"];
@@ -52,11 +67,26 @@ fn preload_audio_files(audio_folder_path: &str) -> HashMap<String, Buffered<Deco
 }
 
 
+fn create_batch_file(audio_file_name: &str, host_ip: &str) -> String {
+    let batch_file = format!(
+        "@echo off\n\
+        curl -X GET http://{}:5055/play/{}\n\
+        exit\n",
+        host_ip, audio_file_name
+    );
+    batch_file
+}
+
+/// ---------- APP & ROUTES ---------- ///
+
 #[get("/")]
 async fn index() -> impl Responder {
     "
     Available routes:
-        - GET /play/{audio_file_name}
+        - GET /ping\t\t\t --> pong
+        - GET /play/{audio_file_name}\t --> play the audio file
+        - GET /startnewlog\t\t --> start a new log file
+        - GET /generate_batch_files\t --> generate a zip file containing batch files for all available audio files
     "
 }
 
@@ -65,7 +95,7 @@ async fn index() -> impl Responder {
 async fn ping() -> impl Responder {
     let time_ns = std::time::SystemTime::now().duration_since(std::time::SystemTime::UNIX_EPOCH).unwrap().as_nanos();
     println!("{}: Received /ping", time_ns);
-    HttpResponse::Ok().json(ResponseMessage { message: "pong".to_string() })
+    HttpResponse::Ok().body("pong")
 }
 
 
@@ -150,6 +180,48 @@ async fn start_new_log() -> impl Responder {
 }
 
 
+#[get("/generate_batch_files")]
+async fn generate_batch_files(audio_files: web::Data<AudioFiles>) -> HttpResponse {
+    let time_ns = std::time::SystemTime::now().duration_since(std::time::SystemTime::UNIX_EPOCH).unwrap().as_nanos();
+    println!("{}: Received /generate_batch_files/", time_ns);
+
+    let host_ip = local_ip().unwrap();
+    let host_ip = host_ip.to_string();
+    
+    // create a zip file containing all the batch files
+    let mut zip_file = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let options = zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Stored);
+
+    // add audio files
+    for (audio_file_name, _) in audio_files.files.iter() {
+        let batch_file = create_batch_file(audio_file_name, &host_ip);
+        zip_file.start_file(format!("{}.bat", audio_file_name), options).unwrap();
+        zip_file.write_all(batch_file.as_bytes()).unwrap();
+    }
+
+    // add one that call /startnewlog as well for convenience
+    let batch_file = format!(
+        "@echo off\n\
+        curl -X GET http://{}:5055/startnewlog\n\
+        exit\n",
+        host_ip
+    );
+    zip_file.start_file("startnewlog.bat", options).unwrap();
+    zip_file.write_all(batch_file.as_bytes()).unwrap();
+
+    // finish the zip file
+    let zip_file = zip_file.finish().unwrap().into_inner();
+
+    println!("\x1b[2m    \x1b[38;5;8mHost IP (this server): {} - Port: {}\x1b[0m", host_ip, 5055);
+    println!("\x1b[2m    \x1b[38;5;8mGenerated batch files for {} audio files\x1b[0m", audio_files.files.len());
+
+    // return the zip file
+    HttpResponse::Ok()
+        .content_type("application/zip")
+        .append_header(("Content-Disposition", format!("attachment; filename=\"{}_5055.zip\"", host_ip)))
+        .body(zip_file)
+}
+
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
@@ -194,6 +266,7 @@ async fn main() -> std::io::Result<()> {
             .service(ping)
             .service(play)
             .service(start_new_log)
+            .service(generate_batch_files)
     })
     .bind(("0.0.0.0", 5055))? // bind to all interfaces
     .run()

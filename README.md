@@ -9,8 +9,18 @@ The server must have some audio output device, such as speakers or headphones, c
 
 To start the server, simply launch the executable included in the [release page](https://github.com/codynhanpham/rust_audio_server/releases) with the following command:
 ```bash
-./start-audio-server # Linux
-start-audio-server.exe # Windows
+# navigate to the directory containing the executable
+cd /path/to/folder/rust_audio_server-(platform)-(version)
+
+# Windows: run the executable
+rust-audio-server.exe # Windows (or just double click it)
+
+# Linux: run the executable
+./rust-audio-server # Linux
+
+# if permission denied (or no such file or directory error), try chmod a+x first
+chmod a+x ./rust-audio-server
+./rust-audio-server # Linux
 ```
 
 The default port is `5055`.
@@ -24,8 +34,8 @@ The default port is `5055`.
 ### Client
 The client can be run on any machine which can connect to the server via TCP.
 
-There are 2 routes for the client:
-#### `GET /play/:audio_filename`
+There are 3 routes for the client:
+#### GET `/play/:audio_filename`
 Plays the audio file `audio_filename` on the server. The `audio_filename` must include the extension, and such a file must exist in the `audio/` folder on the server.
 
 The server will display a message the moment the request is received, and log the exact time the audio file starts playing. The client will only receive a response once the audio file has finished playing.
@@ -37,13 +47,14 @@ The response is a `json` object with the following fields:
 }
 ```
 
-Example request:
+*Example request:*
 ```bash
 curl http://localhost:5055/play/doorbell.wav
 ```
 
+</br>
 
-#### `GET /startnewlog`
+#### GET `/startnewlog`
 Start a new log file with the current `UTC` date time. The response is a `json` object with the following fields:
 ```json
 {
@@ -53,6 +64,30 @@ Start a new log file with the current `UTC` date time. The response is a `json` 
 
 From this point on, all logs will be written to the new log file, until a new log file is started.
 
+*Example request:*
+```bash
+curl http://localhost:5055/startnewlog
+```
+
+</br>
+
+#### GET `/generate_batch_files`
+Generate batch files for all audio files in the `audio/` folder. The batch files are `.bat` files for Windows. The request will be automatically filled with the current server local IP address, and the default port `5055`.
+
+There will be one batch file for each audio file, and an extra `.bat` file that call the `/startnewlog` route. The request will return a `.zip` file containing all the batch files. The `.zip` file will be named with the IP address and port of the server: `{host_ip}_{port}.zip`.
+
+*Example request:*
+```bash
+curl -O -J http://localhost:5055/generate_batch_files
+
+# -O to save the file to the current directory
+# -J to use the filename from the header
+
+# the file will be named something like:
+# 192.168.1.1_5055.zip
+```
+
+</br>
 
 ## Development and Build Instructions
 To make sure that the executable is compatible with Ubuntu 14.04, compiling the code must be done on a machine with Ubuntu 14.04. This can be done by using a virtual machine, such as [VirtualBox](https://www.virtualbox.org/) or Hyper-V. Many low level libraries such as `glibc` or `alsa` are required and dynamically linked, so building on a newer version of Ubuntu will result in a binary that is not compatible with older versions of Ubuntu.

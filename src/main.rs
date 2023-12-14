@@ -50,7 +50,9 @@ fn preload_audio_files(audio_folder_path: &str) -> HashMap<String, Buffered<Deco
 
     let mut files = HashMap::new();
     let paths = fs::read_dir(audio_folder_path).unwrap();
-    let audio_extensions = vec!["mp3", "wav", "flac", "ogg"];
+
+    let audio_extensions = vec!["mp3", "wav", "flac", "ogg"]; // allowed audio file extensions
+
     for path in paths {
         let path = path.unwrap().path();
         let file_name = path.file_name().unwrap().to_str().unwrap().to_string();
@@ -70,6 +72,7 @@ fn preload_audio_files(audio_folder_path: &str) -> HashMap<String, Buffered<Deco
 }
 
 
+// Create a batch file for Windows. Edit this template to change the batch file content
 fn create_batch_file(audio_file_name: &str, host_ip: &str, port: &str) -> String {
     let batch_file = format!(
         "@echo off\n\
@@ -233,7 +236,7 @@ async fn start_new_log() -> impl Responder {
 #[get("/generate_batch_files")]
 async fn generate_batch_files(audio_files: web::Data<AudioFiles>) -> HttpResponse {
     let time_ns = std::time::SystemTime::now().duration_since(std::time::SystemTime::UNIX_EPOCH).unwrap().as_nanos();
-    println!("{}: Received /generate_batch_files/", time_ns);
+    println!("{}: Received /generate_batch_files", time_ns);
 
     let host_ip = local_ip().unwrap();
     let host_ip = host_ip.to_string();

@@ -207,6 +207,9 @@ async fn start_new_log() -> impl Responder {
     let time_ns = std::time::SystemTime::now().duration_since(std::time::SystemTime::UNIX_EPOCH).unwrap().as_nanos();
     println!("{}: Received /startnewlog", time_ns);
 
+    // make sure the log folder exists
+    fs::create_dir_all("./logs").unwrap();
+
     let mut log_file_name = LOG_FILE_NAME.lock().unwrap();
     *log_file_name = Utc::now().format("logs/log_%Y%m%d-%H%M%S").to_string(); // update log file name
 

@@ -80,6 +80,34 @@ fn create_batch_file(audio_file_name: &str, host_ip: &str, port: &str) -> String
     batch_file
 }
 
+
+fn handle_audio_error(audio_file_name: &str, e: &str) -> HttpResponse {
+    println!("\x1b[2m    \x1b[31m{}\x1b[0m", e);
+    println!("\x1b[2m    \x1b[31mError: Could not create OutputStream. Is there any audio output device available?\x1b[0m");
+
+    let message = format!("Could not create OutputStream. Is there any audio output device available? - Error: {}", e);
+
+    // update the log file with the error
+    let time_start_nano = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+    let log_file_name = LOG_FILE_NAME.lock().unwrap();
+    let mut file = OpenOptions::new()
+        .write(true)
+        .append(true)
+        .create(true)
+        .open(format!("{}.csv", *log_file_name))
+        .unwrap();
+    if let Err(e) = writeln!(file, "{},{},{}", time_start_nano, audio_file_name, "error") {
+        eprintln!("Couldn't write to file: {}", e);
+    } else {
+        println!("\x1b[2m    \x1b[31mAppended to log file (error): {}\x1b[0m", *log_file_name);
+    }
+
+    drop(log_file_name); // release the lock
+    drop(file); // release the lock
+
+    HttpResponse::InternalServerError().json(ResponseMessage { message })
+}
+
 /// ---------- APP & ROUTES ---------- ///
 
 #[get("/")]
@@ -117,33 +145,21 @@ async fn play(audio_files: web::Data<AudioFiles> , audio_file_name: web::Path<St
         return HttpResponse::NotFound().json(ResponseMessage { message });
     }
 
-    let output_stream_result = OutputStream::try_default();
-    
-    // the unwrap of output stream will panic if there is no audio output device available, so handle that
-    if let Err(e) = output_stream_result {
-        println!("\x1b[2m    \x1b[31m{}\x1b[0m", e);
-        println!("\x1b[2m    \x1b[31mError: Could not create OutputStream. Is there any audio output device available?\x1b[0m");
+    // Linux with ALSA will panic here if there is no audio output device available
+    let output_stream_result = std::panic::catch_unwind(|| OutputStream::try_default());
 
-        let message = format!("Could not create OutputStream. Is there any audio output device available? - Error: {}", e);
-
-        // update the log file with the error
-        let time_start_nano = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
-        let log_file_name = LOG_FILE_NAME.lock().unwrap();
-        let mut file = OpenOptions::new()
-            .write(true)
-            .append(true)
-            .create(true)
-            .open(format!("{}.csv", *log_file_name))
-            .unwrap();
-        if let Err(e) = writeln!(file, "{},{},{}", time_start_nano, audio_file_name, "error") {
-            eprintln!("Couldn't write to file: {}", e);
-        } else {
-            println!("\x1b[2m    \x1b[31mAppended to log file (error): {}\x1b[0m", *log_file_name);
-        }
-
-        return HttpResponse::InternalServerError().json(ResponseMessage { message });
+    if output_stream_result.is_err() {
+        return handle_audio_error(&audio_file_name, "OutputStream NoDevice");
     }
 
+    let output_stream_result = output_stream_result.unwrap();
+
+    // Windows somehow panics when unwraping the output_stream_result for the same reason (no audio output device available)
+    if let Err(e) = output_stream_result {
+        return handle_audio_error(&audio_file_name, &e.to_string());
+    }
+
+    // now safe to unwrap
     let (_stream, stream_handle) = output_stream_result.unwrap();
 
     let sink = Sink::try_new(&stream_handle).unwrap();

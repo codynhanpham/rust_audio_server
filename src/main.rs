@@ -1,5 +1,5 @@
 use actix_web::{get, web, App, HttpServer, HttpResponse, Responder};
-use std::fs;
+use std::{fs, panic};
 use std::collections::HashMap;
 use std::io::BufReader;
 use rodio::{Decoder, OutputStream, Sink};
@@ -16,6 +16,9 @@ use local_ip_address::local_ip;
 lazy_static::lazy_static! {
     static ref LOG_FILE_NAME: Arc<Mutex<String>> = Arc::new(Mutex::new(Utc::now().format("logs/log_%Y%m%d-%H%M%S").to_string()));
 }
+
+// Define the port number
+static PORT: u16 = 5055;
 
 
 #[derive(Serialize)]
@@ -67,12 +70,12 @@ fn preload_audio_files(audio_folder_path: &str) -> HashMap<String, Buffered<Deco
 }
 
 
-fn create_batch_file(audio_file_name: &str, host_ip: &str) -> String {
+fn create_batch_file(audio_file_name: &str, host_ip: &str, port: &str) -> String {
     let batch_file = format!(
         "@echo off\n\
-        curl -X GET http://{}:5055/play/{}\n\
+        curl -X GET http://{}:{}/play/{}\n\
         exit\n",
-        host_ip, audio_file_name
+        host_ip, port, audio_file_name
     );
     batch_file
 }
@@ -109,26 +112,32 @@ async fn play(audio_files: web::Data<AudioFiles> , audio_file_name: web::Path<St
 
     // if the audio file is not found, return 404
     if source.is_none() {
-        println!("\x1b[2m    \x1b[38;5;8mAudio file Not Found\x1b[0m");
+        println!("\x1b[2m    \x1b[31;5;8mAudio file Not Found\x1b[0m");
         let message = format!("Audio file {} not found", audio_file_name);
         return HttpResponse::NotFound().json(ResponseMessage { message });
     }
 
-    let output_stream_result = OutputStream::try_default();
+    let output_stream_result = panic::catch_unwind(|| OutputStream::try_default());
     if output_stream_result.is_err() {
         println!("\x1b[2m    \x1b[31;5;8mError: Could not create OutputStream. Is there any audio output device available?\x1b[0m");
         return HttpResponse::InternalServerError().finish();
     }
-
-    let (_stream, stream_handle) = output_stream_result.unwrap();
-    let sink_result = Sink::try_new(&stream_handle);
+    
+    let (_stream, stream_handle) = output_stream_result.unwrap().unwrap();
+    let sink_result = panic::catch_unwind(|| Sink::try_new(&stream_handle));
     if sink_result.is_err() {
         println!("\x1b[2m    \x1b[31;5;8mError: Could not create Sink. Is there any audio output device available?\x1b[0m");
         return HttpResponse::InternalServerError().finish();
     }
-
-    let sink = sink_result.unwrap();
-    sink.append(source.unwrap().clone()); // init the sink with the audio file
+    
+    let sink = sink_result.unwrap().unwrap();
+    let source_result = panic::catch_unwind(|| source.unwrap().clone());
+    if source_result.is_err() {
+        println!("\x1b[2m    \x1b[31;5;8mError: Could not clone source. Is the source valid?\x1b[0m");
+        return HttpResponse::InternalServerError().finish();
+    }
+    
+    sink.append(source_result.unwrap()); // init the sink with the audio file
     let time_start_nano = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
     
     println!("\x1b[2m    \x1b[38;5;8m{}: Started {}...\x1b[0m", time_start_nano, audio_file_name);
@@ -141,6 +150,8 @@ async fn play(audio_files: web::Data<AudioFiles> , audio_file_name: web::Path<St
     drop(_stream);
     
     // Append to the log file
+    fs::create_dir_all("./logs").unwrap(); // make sure the logs/ folder exists first
+
     let log_file_name = LOG_FILE_NAME.lock().unwrap();
     let mut file = OpenOptions::new()
         .write(true)
@@ -206,7 +217,7 @@ async fn generate_batch_files(audio_files: web::Data<AudioFiles>) -> HttpRespons
 
     // add audio files
     for (audio_file_name, _) in audio_files.files.iter() {
-        let batch_file = create_batch_file(audio_file_name, &host_ip);
+        let batch_file = create_batch_file(audio_file_name, &host_ip, &PORT.to_string());
         zip_file.start_file(format!("{}.bat", audio_file_name), options).unwrap();
         zip_file.write_all(batch_file.as_bytes()).unwrap();
     }
@@ -214,9 +225,9 @@ async fn generate_batch_files(audio_files: web::Data<AudioFiles>) -> HttpRespons
     // add one that call /startnewlog as well for convenience
     let batch_file = format!(
         "@echo off\n\
-        curl -X GET http://{}:5055/startnewlog\n\
+        curl -X GET http://{}:{}/startnewlog\n\
         exit\n",
-        host_ip
+        host_ip, PORT
     );
     zip_file.start_file("startnewlog.bat", options).unwrap();
     zip_file.write_all(batch_file.as_bytes()).unwrap();
@@ -224,13 +235,13 @@ async fn generate_batch_files(audio_files: web::Data<AudioFiles>) -> HttpRespons
     // finish the zip file
     let zip_file = zip_file.finish().unwrap().into_inner();
 
-    println!("\x1b[2m    \x1b[38;5;8mHost IP (this server): {} - Port: {}\x1b[0m", host_ip, 5055);
+    println!("\x1b[2m    \x1b[38;5;8mHost IP (this server): {} - Port: {}\x1b[0m", host_ip, PORT);
     println!("\x1b[2m    \x1b[38;5;8mGenerated batch files for {} audio files\x1b[0m", audio_files.files.len());
 
     // return the zip file
     HttpResponse::Ok()
         .content_type("application/zip")
-        .append_header(("Content-Disposition", format!("attachment; filename=\"{}_5055.zip\"", host_ip)))
+        .append_header(("Content-Disposition", format!("attachment; filename=\"{}_{}.zip\"", host_ip, PORT)))
         .body(zip_file)
 }
 
@@ -273,7 +284,7 @@ async fn main() -> std::io::Result<()> {
     // start the server
     let host_ip = local_ip().unwrap();
     let host_ip = host_ip.to_string();
-    println!("Server running at http://{}:5055/\n\n", host_ip);
+    println!("Server running at http://{}:{}/\n\n", host_ip, PORT);
     HttpServer::new(move || {
         App::new()
             .app_data(audio_files.clone())
@@ -283,7 +294,7 @@ async fn main() -> std::io::Result<()> {
             .service(start_new_log)
             .service(generate_batch_files)
     })
-    .bind(("0.0.0.0", 5055))? // bind to all interfaces
+    .bind(("0.0.0.0", PORT))? // bind to all interfaces
     .run()
     .await
 }

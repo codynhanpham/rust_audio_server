@@ -3,7 +3,7 @@ use chrono::Utc;
 use local_ip_address::local_ip;
 use rodio::{Decoder, OutputStream, Sink};
 use rodio::source::{Source, Buffered};
-use serde::Serialize;
+use serde::{Serialize, Deserialize};
 use std::collections::HashMap;
 use std::fs;
 use std::fs::OpenOptions;
@@ -24,6 +24,13 @@ static PORT: u16 = 5055;
 #[derive(Serialize)]
 struct ResponseMessage {
     message: String,
+}
+
+#[derive(Deserialize)]
+struct QueryStruct {
+    // optional parameters
+    #[serde(default)]
+    time: String,
 }
 
 struct AudioFiles {
@@ -76,15 +83,22 @@ fn preload_audio_files(audio_folder_path: &str) -> HashMap<String, Buffered<Deco
 fn create_batch_file(audio_file_name: &str, host_ip: &str, port: &str) -> String {
     let batch_file = format!(
         "@echo off\n\
-        curl -X GET http://{}:{}/play/{}\n\
-        exit\n",
+        <!-- :\n\
+            for /f \"tokens=* usebackq\" %%a in (`start /b cscript //nologo \"%~f0?.wsf\"`) do (set timestamp=%%a)\n\
+            curl -X GET http://{}:{}/play/{}?time=%timestamp%000000\n\
+            exit /b\n\
+            -->\n\
+            \n\
+            <job><script language=\"JavaScript\">\n\
+            WScript.Echo(new Date().getTime());\n\
+            </script></job>\n",
         host_ip, port, audio_file_name
     );
     batch_file
 }
 
 
-fn handle_audio_error(audio_file_name: &str, e: &str) -> HttpResponse {
+fn handle_audio_error(audio_file_name: &str, request_time: &str, e: &str) -> HttpResponse {
     println!("\x1b[2m    \x1b[31m{}\x1b[0m", e);
     println!("\x1b[2m    \x1b[31mError: Could not create OutputStream. Is there any audio output device available?\x1b[0m");
 
@@ -99,7 +113,7 @@ fn handle_audio_error(audio_file_name: &str, e: &str) -> HttpResponse {
         .create(true)
         .open(format!("{}.csv", *log_file_name))
         .unwrap();
-    if let Err(e) = writeln!(file, "{},{},{}", time_start_nano, audio_file_name, "error") {
+    if let Err(e) = writeln!(file, "{},{},{},{}", time_start_nano, audio_file_name, "error", request_time) {
         eprintln!("Couldn't write to file: {}", e);
     } else {
         println!("\x1b[2m    \x1b[31mAppended to log file (error): {}\x1b[0m", *log_file_name);
@@ -134,7 +148,7 @@ async fn ping() -> impl Responder {
 
 
 #[get("/play/{audio_file_name}")]
-async fn play(audio_files: web::Data<AudioFiles> , audio_file_name: web::Path<String>) -> HttpResponse {
+async fn play(audio_files: web::Data<AudioFiles> , audio_file_name: web::Path<String>, query: web::Query<QueryStruct>) -> HttpResponse {
     let time_ns = std::time::SystemTime::now().duration_since(std::time::SystemTime::UNIX_EPOCH).unwrap().as_nanos();
     println!("{}: Received /play/{}", time_ns, audio_file_name);
 
@@ -152,14 +166,14 @@ async fn play(audio_files: web::Data<AudioFiles> , audio_file_name: web::Path<St
     let output_stream_result = std::panic::catch_unwind(|| OutputStream::try_default());
 
     if output_stream_result.is_err() {
-        return handle_audio_error(&audio_file_name, "OutputStream NoDevice");
+        return handle_audio_error(&audio_file_name, &query.time, "OutputStream NoDevice");
     }
 
     let output_stream_result = output_stream_result.unwrap();
 
     // Windows somehow panics when unwraping the output_stream_result for the same reason (no audio output device available)
     if let Err(e) = output_stream_result {
-        return handle_audio_error(&audio_file_name, &e.to_string());
+        return handle_audio_error(&audio_file_name, &query.time, &e.to_string());
     }
 
     // now safe to unwrap
@@ -189,7 +203,7 @@ async fn play(audio_files: web::Data<AudioFiles> , audio_file_name: web::Path<St
         .create(true)
         .open(format!("{}.csv", *log_file_name))
         .unwrap();
-    if let Err(e) = writeln!(file, "{},{},{}", time_start_nano, audio_file_name, "success") {
+    if let Err(e) = writeln!(file, "{},{},{},{}", time_start_nano, audio_file_name, "success", &query.time) {
         eprintln!("Couldn't write to file: {}", e);
     } else {
         println!("\x1b[2m    \x1b[38;5;8mAppended to log file: {}\x1b[0m", *log_file_name);
@@ -223,7 +237,7 @@ async fn start_new_log() -> impl Responder {
     let mut message = format!("Started new log file: ./{}.csv", *log_file_name);
     drop(log_file_name);
 
-    if let Err(e) = writeln!(file, "timestamp,audio_filename,status") {
+    if let Err(e) = writeln!(file, "timestamp_audio,audio_filename,status,timestamp_request") {
         eprintln!("Couldn't create new file: {}", e);
 
         message = format!("Error: Couldn't create new file: {}", e);
@@ -304,7 +318,7 @@ async fn main() -> std::io::Result<()> {
         .create(true)
         .open(format!("{}.csv", *log_file_name))
         .unwrap();
-    if let Err(e) = writeln!(file, "Timestamp,Audio File Name,Status") {
+    if let Err(e) = writeln!(file, "timestamp_audio,audio_filename,status,timestamp_request") {
         eprintln!("Couldn't create new file: {}", e);
     } else {
         println!("Started new log file: ./{}.csv\n", *log_file_name);

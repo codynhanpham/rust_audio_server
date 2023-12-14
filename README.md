@@ -27,7 +27,7 @@ The default port is `5055`.
 
 **The server must also have an `audio/` folder in the same directory as the executable**, which contains the audio files to be played. The only tested audio format is `.wav`, though in theory any format supported by [rodio](https://docs.rs/rodio/0.12.0/rodio/index.html) should work.
 
-**Logs** are written to the `logs/` folder, which is created in the same directory as the executable. Logs are `csv` files, with these columns in order: `timestamp` (UNIX nanosecond), `audio_filename`, and `status` (either `success` or `error`).
+**Logs** are written to the `logs/` folder, which is created in the same directory as the executable. Logs are `csv` files, with these columns in order: `timestamp_audio` (UNIX nanosecond), `audio_filename`, `status` (either `success` or `error`), and `timestamp_request` (*anything from the client*).
 
 </br>
 
@@ -52,10 +52,19 @@ The response is a `json` object with the following fields:
 curl http://localhost:5055/play/doorbell.wav
 ```
 
+##### Note
+
+> A very optional parameter, `time`, is available for this route. You can indicate the request time (ideally in UNIX nanosecond) in the request, and the server will log it. This is useful if you want to compare the request time with the audio start time in the logs. ***THIS ASSUME THAT THE CLIENT AND SERVER ARE SYNCED TO THE SAME CLOCK / TIME***. If you are unsure of the time difference between the client and server, simply ignore this parameter, as well as the `timestamp_request` column in the logs.
+>
+> *Example request:*
+> ```bash
+> curl http://localhost:5055/play/doorbell.wav?time=1620000000000000000
+> ```
+
 </br>
 
 #### GET `/startnewlog`
-Start a new log file with the current `UTC` date time. The response is a `json` object with the following fields:
+Start a new log file with the current `UTC` date time on the server. The response is a `json` object with the following fields:
 ```json
 {
   "message": "Started new log file: ./{YYYYMMDD-hhmmss}.csv"
@@ -75,6 +84,8 @@ curl http://localhost:5055/startnewlog
 Generate batch files for all audio files in the `audio/` folder. The batch files are `.bat` files for Windows. The request will be automatically filled with the current server local IP address, and the default port `5055`.
 
 There will be one batch file for each audio file, and an extra `.bat` file that call the `/startnewlog` route. The request will return a `.zip` file containing all the batch files. The `.zip` file will be named with the IP address and port of the server: `{host_ip}_{port}.zip`.
+
+> The batch files for requesting audio have the value for the optional query `?time=` included. It automatically pull the client clock time and use it as the request time. ***The accuracy of Windows clock is only to the millisecond, so the request time will be rounded to the nearest millisecond, then times 1,000,000 for `nanoseconds`***. The same assumption as the [Note](#note) above applies for the data to be meaningful: the client and server must be synced to the same clock. ***Please ignore the `timestamp_request` column in the logs if you are unsure of the time difference between the client and server.***
 
 *Example request:*
 ```bash

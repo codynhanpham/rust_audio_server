@@ -1,6 +1,6 @@
 [package]
 name = "rust_audio_server"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 authors = ["Cody Nhan Pham"]
 description = "An audio server that plays and logs audio files on the host machine upon GET requests. Compatible with Windows (10+) and Linux (Ubuntu 14.04+, yes, trusty!). MacOS was not tested."

@@ -1,15 +1,15 @@
 use actix_web::{get, web, App, HttpServer, HttpResponse, Responder};
-use std::{fs, panic};
-use std::collections::HashMap;
-use std::io::BufReader;
+use chrono::Utc;
+use local_ip_address::local_ip;
 use rodio::{Decoder, OutputStream, Sink};
 use rodio::source::{Source, Buffered};
 use serde::Serialize;
-use std::sync::{Arc, Mutex};
-use chrono::Utc;
+use std::collections::HashMap;
+use std::fs;
 use std::fs::OpenOptions;
+use std::io::BufReader;
 use std::io::Write;
-use local_ip_address::local_ip;
+use std::sync::{Arc, Mutex};
 
 // Define the global variable for the log file name
 // This will be updated whenever a new /startnewlog request is received
@@ -112,32 +112,43 @@ async fn play(audio_files: web::Data<AudioFiles> , audio_file_name: web::Path<St
 
     // if the audio file is not found, return 404
     if source.is_none() {
-        println!("\x1b[2m    \x1b[31;5;8mAudio file Not Found\x1b[0m");
+        println!("\x1b[2m    \x1b[31mAudio file Not Found\x1b[0m");
         let message = format!("Audio file {} not found", audio_file_name);
         return HttpResponse::NotFound().json(ResponseMessage { message });
     }
 
-    let output_stream_result = panic::catch_unwind(|| OutputStream::try_default());
-    if output_stream_result.is_err() {
-        println!("\x1b[2m    \x1b[31;5;8mError: Could not create OutputStream. Is there any audio output device available?\x1b[0m");
-        return HttpResponse::InternalServerError().finish();
-    }
+    let output_stream_result = OutputStream::try_default();
     
-    let (_stream, stream_handle) = output_stream_result.unwrap().unwrap();
-    let sink_result = panic::catch_unwind(|| Sink::try_new(&stream_handle));
-    if sink_result.is_err() {
-        println!("\x1b[2m    \x1b[31;5;8mError: Could not create Sink. Is there any audio output device available?\x1b[0m");
-        return HttpResponse::InternalServerError().finish();
+    // the unwrap of output stream will panic if there is no audio output device available, so handle that
+    if let Err(e) = output_stream_result {
+        println!("\x1b[2m    \x1b[31m{}\x1b[0m", e);
+        println!("\x1b[2m    \x1b[31mError: Could not create OutputStream. Is there any audio output device available?\x1b[0m");
+
+        let message = format!("Could not create OutputStream. Is there any audio output device available? - Error: {}", e);
+
+        // update the log file with the error
+        let time_start_nano = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+        let log_file_name = LOG_FILE_NAME.lock().unwrap();
+        let mut file = OpenOptions::new()
+            .write(true)
+            .append(true)
+            .create(true)
+            .open(format!("{}.csv", *log_file_name))
+            .unwrap();
+        if let Err(e) = writeln!(file, "{},{},{}", time_start_nano, audio_file_name, "error") {
+            eprintln!("Couldn't write to file: {}", e);
+        } else {
+            println!("\x1b[2m    \x1b[31mAppended to log file (error): {}\x1b[0m", *log_file_name);
+        }
+
+        return HttpResponse::InternalServerError().json(ResponseMessage { message });
     }
-    
-    let sink = sink_result.unwrap().unwrap();
-    let source_result = panic::catch_unwind(|| source.unwrap().clone());
-    if source_result.is_err() {
-        println!("\x1b[2m    \x1b[31;5;8mError: Could not clone source. Is the source valid?\x1b[0m");
-        return HttpResponse::InternalServerError().finish();
-    }
-    
-    sink.append(source_result.unwrap()); // init the sink with the audio file
+
+    let (_stream, stream_handle) = output_stream_result.unwrap();
+
+    let sink = Sink::try_new(&stream_handle).unwrap();
+    sink.append(source.unwrap().clone()); // init the sink with the audio file
+
     let time_start_nano = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
     
     println!("\x1b[2m    \x1b[38;5;8m{}: Started {}...\x1b[0m", time_start_nano, audio_file_name);

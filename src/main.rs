@@ -80,10 +80,20 @@ fn preload_audio_files(audio_folder_path: &str) -> HashMap<String, Buffered<Deco
 
 
 // Create a batch file for Windows. Edit this template to change the batch file content
-fn create_batch_file(audio_file_name: &str, host_ip: &str, port: &str) -> String {
-    let batch_file = format!(
-        "@echo off\n\
-        <!-- :\n\
+fn create_batch_file(audio_file_name: &str, host_ip: &str, port: &str, with_async: bool) -> String {
+    if with_async {
+        let batch_file = format!(
+            "@echo off\n\
+            .\\async_get.exe -u http://{}:{}/play/{}\n\
+            exit\n",
+            host_ip, port, audio_file_name
+        );
+        return batch_file;
+    } 
+    else {
+        let batch_file = format!(
+            "@echo off\n\
+            <!-- :\n\
             for /f \"tokens=* usebackq\" %%a in (`start /b cscript //nologo \"%~f0?.wsf\"`) do (set timestamp=%%a)\n\
             curl -X GET http://{}:{}/play/{}?time=%timestamp%000000\n\
             exit /b\n\
@@ -92,9 +102,46 @@ fn create_batch_file(audio_file_name: &str, host_ip: &str, port: &str) -> String
             <job><script language=\"JavaScript\">\n\
             WScript.Echo(new Date().getTime());\n\
             </script></job>\n",
-        host_ip, port, audio_file_name
+            host_ip, port, audio_file_name
+        );
+        return batch_file;
+    }
+    // batch_file
+}
+
+
+fn make_batch_zip_file(audio_files: &web::Data<AudioFiles>, host_ip: &str, with_async: bool) -> Vec<u8> {
+    // create a zip file containing all the batch files
+    let mut zip_file = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let options = zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Stored);
+
+    // add audio files
+    for (audio_file_name, _) in audio_files.files.iter() {
+        let batch_file = create_batch_file(audio_file_name, &host_ip, &PORT.to_string(), with_async);
+        zip_file.start_file(format!("{}.bat", audio_file_name), options).unwrap();
+        zip_file.write_all(batch_file.as_bytes()).unwrap();
+    }
+
+    // add one that call /startnewlog as well for convenience
+    let batch_file = format!(
+        "@echo off\n\
+        curl -X GET http://{}:{}/startnewlog\n\
+        exit\n",
+        host_ip, PORT
     );
-    batch_file
+    zip_file.start_file("startnewlog.bat", options).unwrap();
+    zip_file.write_all(batch_file.as_bytes()).unwrap();
+
+    // if with_async, also bundle the async_get.exe file
+    if with_async {
+        let async_get_file = include_bytes!("../async_get.exe");
+        zip_file.start_file("async_get.exe", options).unwrap();
+        zip_file.write_all(async_get_file).unwrap();
+    }
+
+    // finish the zip file
+    let zip_file = zip_file.finish().unwrap().into_inner();
+    zip_file
 }
 
 
@@ -259,28 +306,7 @@ async fn generate_batch_files(audio_files: web::Data<AudioFiles>) -> HttpRespons
     let host_ip = host_ip.to_string();
     
     // create a zip file containing all the batch files
-    let mut zip_file = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
-    let options = zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Stored);
-
-    // add audio files
-    for (audio_file_name, _) in audio_files.files.iter() {
-        let batch_file = create_batch_file(audio_file_name, &host_ip, &PORT.to_string());
-        zip_file.start_file(format!("{}.bat", audio_file_name), options).unwrap();
-        zip_file.write_all(batch_file.as_bytes()).unwrap();
-    }
-
-    // add one that call /startnewlog as well for convenience
-    let batch_file = format!(
-        "@echo off\n\
-        curl -X GET http://{}:{}/startnewlog\n\
-        exit\n",
-        host_ip, PORT
-    );
-    zip_file.start_file("startnewlog.bat", options).unwrap();
-    zip_file.write_all(batch_file.as_bytes()).unwrap();
-
-    // finish the zip file
-    let zip_file = zip_file.finish().unwrap().into_inner();
+    let zip_file = make_batch_zip_file(&audio_files, &host_ip, false);
 
     println!("\x1b[2m    \x1b[38;5;8mHost IP (this server): {} - Port: {}\x1b[0m", host_ip, PORT);
     println!("\x1b[2m    \x1b[38;5;8mGenerated batch files for {} audio files\x1b[0m", audio_files.files.len());
@@ -289,6 +315,27 @@ async fn generate_batch_files(audio_files: web::Data<AudioFiles>) -> HttpRespons
     HttpResponse::Ok()
         .content_type("application/zip")
         .append_header(("Content-Disposition", format!("attachment; filename=\"{}_{}.zip\"", host_ip, PORT)))
+        .body(zip_file)
+}
+
+#[get("/generate_batch_files_async")]
+async fn generate_batch_files_async(audio_files: web::Data<AudioFiles>) -> HttpResponse {
+    let time_ns = std::time::SystemTime::now().duration_since(std::time::SystemTime::UNIX_EPOCH).unwrap().as_nanos();
+    println!("{}: Received /generate_batch_files_async", time_ns);
+
+    let host_ip = local_ip().unwrap();
+    let host_ip = host_ip.to_string();
+    
+    // create a zip file containing all the batch files
+    let zip_file = make_batch_zip_file(&audio_files, &host_ip, true);
+
+    println!("\x1b[2m    \x1b[38;5;8mHost IP (this server): {} - Port: {}\x1b[0m", host_ip, PORT);
+    println!("\x1b[2m    \x1b[38;5;8mGenerated batch files for {} audio files\x1b[0m", audio_files.files.len());
+
+    // return the zip file
+    HttpResponse::Ok()
+        .content_type("application/zip")
+        .append_header(("Content-Disposition", format!("attachment; filename=\"{}_{}_async.zip\"", host_ip, PORT)))
         .body(zip_file)
 }
 
@@ -340,6 +387,7 @@ async fn main() -> std::io::Result<()> {
             .service(play)
             .service(start_new_log)
             .service(generate_batch_files)
+            .service(generate_batch_files_async)
     })
     .bind(("0.0.0.0", PORT))? // bind to all interfaces
     .run()

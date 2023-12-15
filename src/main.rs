@@ -8,7 +8,7 @@ use std::{
 use actix_web::{get, web, App, HttpServer, HttpResponse, Responder};
 use chrono::Utc;
 use local_ip_address::local_ip;
-use rodio::{OutputStream, Sink};
+use rodio::{OutputStream, Sink, Source};
 
 mod structs;
 use structs::{ResponseMessage, QueryStruct, AudioFiles};
@@ -88,6 +88,10 @@ async fn play(audio_files: web::Data<AudioFiles> , audio_file_name: web::Path<St
 
     // now safe to unwrap
     let (_stream, stream_handle) = output_stream_result.unwrap();
+
+    // print the source sample rate
+    println!("\x1b[2m    \x1b[38;5;8mSource sample rate: {}\x1b[0m", source.unwrap().sample_rate());
+
 
     let sink = Sink::try_new(&stream_handle).unwrap();
     sink.append(source.unwrap().clone()); // init the sink with the audio file

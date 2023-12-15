@@ -1,15 +1,24 @@
+use std::{
+    fs,
+    fs::OpenOptions,
+    io::Write,
+    sync::{Arc, Mutex},
+};
+
 use actix_web::{get, web, App, HttpServer, HttpResponse, Responder};
 use chrono::Utc;
 use local_ip_address::local_ip;
-use rodio::{Decoder, OutputStream, Sink};
-use rodio::source::{Source, Buffered};
-use serde::{Serialize, Deserialize};
-use std::collections::HashMap;
-use std::fs;
-use std::fs::OpenOptions;
-use std::io::BufReader;
-use std::io::Write;
-use std::sync::{Arc, Mutex};
+use rodio::{OutputStream, Sink};
+
+mod structs;
+use structs::{ResponseMessage, QueryStruct, AudioFiles};
+
+mod audio;
+use audio::{preload_audio_files, handle_audio_error};
+
+mod file_io;
+use file_io::make_batch_zip_file;
+
 
 // Define the global variable for the log file name
 // This will be updated whenever a new /startnewlog request is received
@@ -21,156 +30,6 @@ lazy_static::lazy_static! {
 static PORT: u16 = 5055;
 
 
-#[derive(Serialize)]
-struct ResponseMessage {
-    message: String,
-}
-
-#[derive(Deserialize)]
-struct QueryStruct {
-    // optional parameters
-    #[serde(default)]
-    time: String,
-}
-
-struct AudioFiles {
-    files: HashMap<String, Buffered<Decoder<BufReader<std::fs::File>>>>,
-}
-
-// Preload audio files to RAM for faster playback
-// Returns a HashMap of audio file names and their corresponding Buffered<Decoder<BufReader<std::fs::File>>> objects
-fn preload_audio_files(audio_folder_path: &str) -> HashMap<String, Buffered<Decoder<BufReader<std::fs::File>>>> {
-    println!("Preloading audio files...");
-
-    // check if the audio folder exists, if not, display an error message and exit
-    if !fs::metadata(audio_folder_path).is_ok() {
-        println!("\x1b[2m    \x1b[38;5;8mError: Audio folder not found\x1b[0m");
-        println!("Please create a folder named \"audio\" in the same directory as this executable and put your audio files in it.");
-
-        // wait for user hitting enter before exiting
-        println!("\n\n(Press Enter to exit)");
-        let mut input = String::new();
-        std::io::stdin().read_line(&mut input).unwrap();
-
-        std::process::exit(1);
-    }
-
-    let mut files = HashMap::new();
-    let paths = fs::read_dir(audio_folder_path).unwrap();
-
-    let audio_extensions = vec!["mp3", "wav", "flac", "ogg"]; // allowed audio file extensions
-
-    for path in paths {
-        let path = path.unwrap().path();
-        let file_name = path.file_name().unwrap().to_str().unwrap().to_string();
-
-        // ignore files that are not audio files
-        let extension = path.extension().unwrap().to_str().unwrap();
-        if !audio_extensions.contains(&extension) {
-            continue;
-        }
-
-        let file = std::fs::File::open(path).unwrap();
-        let source = Decoder::new(BufReader::new(file)).unwrap().buffered();
-        files.insert(file_name, source);
-    }
-    println!("Preloaded {} audio files to RAM\n", files.len());
-    files
-}
-
-
-// Create a batch file for Windows. Edit this template to change the batch file content
-fn create_batch_file(audio_file_name: &str, host_ip: &str, port: &str, with_async: bool) -> String {
-    if with_async {
-        let batch_file = format!(
-            "@echo off\n\
-            .\\async_get.exe -u http://{}:{}/play/{}\n\
-            exit\n",
-            host_ip, port, audio_file_name
-        );
-        return batch_file;
-    } 
-    else {
-        let batch_file = format!(
-            "@echo off\n\
-            <!-- :\n\
-            for /f \"tokens=* usebackq\" %%a in (`start /b cscript //nologo \"%~f0?.wsf\"`) do (set timestamp=%%a)\n\
-            curl -X GET http://{}:{}/play/{}?time=%timestamp%000000\n\
-            exit /b\n\
-            -->\n\
-            \n\
-            <job><script language=\"JavaScript\">\n\
-            WScript.Echo(new Date().getTime());\n\
-            </script></job>\n",
-            host_ip, port, audio_file_name
-        );
-        return batch_file;
-    }
-    // batch_file
-}
-
-
-fn make_batch_zip_file(audio_files: &web::Data<AudioFiles>, host_ip: &str, with_async: bool) -> Vec<u8> {
-    // create a zip file containing all the batch files
-    let mut zip_file = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
-    let options = zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Stored);
-
-    // add audio files
-    for (audio_file_name, _) in audio_files.files.iter() {
-        let batch_file = create_batch_file(audio_file_name, &host_ip, &PORT.to_string(), with_async);
-        zip_file.start_file(format!("{}.bat", audio_file_name), options).unwrap();
-        zip_file.write_all(batch_file.as_bytes()).unwrap();
-    }
-
-    // add one that call /startnewlog as well for convenience
-    let batch_file = format!(
-        "@echo off\n\
-        curl -X GET http://{}:{}/startnewlog\n\
-        exit\n",
-        host_ip, PORT
-    );
-    zip_file.start_file("startnewlog.bat", options).unwrap();
-    zip_file.write_all(batch_file.as_bytes()).unwrap();
-
-    // if with_async, also bundle the async_get.exe file
-    if with_async {
-        let async_get_file = include_bytes!("../async_get.exe");
-        zip_file.start_file("async_get.exe", options).unwrap();
-        zip_file.write_all(async_get_file).unwrap();
-    }
-
-    // finish the zip file
-    let zip_file = zip_file.finish().unwrap().into_inner();
-    zip_file
-}
-
-
-fn handle_audio_error(audio_file_name: &str, request_time: &str, e: &str) -> HttpResponse {
-    println!("\x1b[2m    \x1b[31m{}\x1b[0m", e);
-    println!("\x1b[2m    \x1b[31mError: Could not create OutputStream. Is there any audio output device available?\x1b[0m");
-
-    let message = format!("Could not create OutputStream. Is there any audio output device available? - Error: {}", e);
-
-    // update the log file with the error
-    let time_start_nano = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
-    let log_file_name = LOG_FILE_NAME.lock().unwrap();
-    let mut file = OpenOptions::new()
-        .write(true)
-        .append(true)
-        .create(true)
-        .open(format!("{}.csv", *log_file_name))
-        .unwrap();
-    if let Err(e) = writeln!(file, "{},{},{},{}", time_start_nano, audio_file_name, "error", request_time) {
-        eprintln!("Couldn't write to file: {}", e);
-    } else {
-        println!("\x1b[2m    \x1b[31mAppended to log file (error): {}\x1b[0m", *log_file_name);
-    }
-
-    drop(log_file_name); // release the lock
-    drop(file); // release the lock
-
-    HttpResponse::InternalServerError().json(ResponseMessage { message })
-}
 
 /// ---------- APP & ROUTES ---------- ///
 
@@ -178,10 +37,14 @@ fn handle_audio_error(audio_file_name: &str, request_time: &str, e: &str) -> Htt
 async fn index() -> impl Responder {
     "
     Available routes:
-        - GET /ping\t\t\t --> pong
-        - GET /play/{audio_file_name}\t --> play the audio file
-        - GET /startnewlog\t\t --> start a new log file
-        - GET /generate_batch_files\t --> generate a zip file containing batch files for all available audio files
+        - GET /ping\t\t\t\t --> pong
+        - GET /play/{audio_file_name}\t\t --> play the audio file
+        - GET /startnewlog\t\t\t --> start a new log file
+        - GET /generate_batch_files\t\t --> generate a .zip containing batch files to request the audio files (close when audio file is finished playing)
+        - GET /generate_batch_files_async\t --> generate a .zip containing batch files to request the audio files (asynchronous, close immediately)
+
+    Note:
+        - The batch files generated by /generate_batch_files and /generate_batch_files_async are for Windows only.
     "
 }
 
@@ -213,14 +76,14 @@ async fn play(audio_files: web::Data<AudioFiles> , audio_file_name: web::Path<St
     let output_stream_result = std::panic::catch_unwind(|| OutputStream::try_default());
 
     if output_stream_result.is_err() {
-        return handle_audio_error(&audio_file_name, &query.time, "OutputStream NoDevice");
+        return handle_audio_error(&audio_file_name, &query.time, "OutputStream NoDevice", &LOG_FILE_NAME);
     }
 
     let output_stream_result = output_stream_result.unwrap();
 
     // Windows somehow panics when unwraping the output_stream_result for the same reason (no audio output device available)
     if let Err(e) = output_stream_result {
-        return handle_audio_error(&audio_file_name, &query.time, &e.to_string());
+        return handle_audio_error(&audio_file_name, &query.time, &e.to_string(), &LOG_FILE_NAME);
     }
 
     // now safe to unwrap
@@ -284,7 +147,7 @@ async fn start_new_log() -> impl Responder {
     let mut message = format!("Started new log file: ./{}.csv", *log_file_name);
     drop(log_file_name);
 
-    if let Err(e) = writeln!(file, "timestamp_audio,audio_filename,status,timestamp_request") {
+    if let Err(e) = writeln!(file, "timestamp_audio,audio_filename,status,timestamp_client") {
         eprintln!("Couldn't create new file: {}", e);
 
         message = format!("Error: Couldn't create new file: {}", e);
@@ -365,7 +228,7 @@ async fn main() -> std::io::Result<()> {
         .create(true)
         .open(format!("{}.csv", *log_file_name))
         .unwrap();
-    if let Err(e) = writeln!(file, "timestamp_audio,audio_filename,status,timestamp_request") {
+    if let Err(e) = writeln!(file, "timestamp_audio,audio_filename,status,timestamp_client") {
         eprintln!("Couldn't create new file: {}", e);
     } else {
         println!("Started new log file: ./{}.csv\n", *log_file_name);

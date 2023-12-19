@@ -59,7 +59,7 @@ pub fn make_batch_zip_file(audio_files: &web::Data<AudioFiles>, host_ip: &str, w
 
     // if with_async, also bundle the async_get.exe file
     if with_async {
-        let async_get_file = include_bytes!("../async_get.exe");
+        let async_get_file = include_bytes!("./async_get.exe");
         zip_file.start_file("async_get.exe", options).unwrap();
         zip_file.write_all(async_get_file).unwrap();
     }

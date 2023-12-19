@@ -1383,6 +1383,7 @@ version = "0.3.0"
 dependencies = [
  "actix-web",
  "chrono",
+ "hound",
  "lazy_static",
  "local-ip-address",
  "rodio",

@@ -34,7 +34,7 @@ The default port is `5055`.
 ### Client
 The client can be run on any machine which can connect to the server via TCP.
 
-There are 4 routes for the client:
+There are a few routes available for the client:
 #### GET `/play/:audio_filename`
 Plays the audio file `audio_filename` on the server. The `audio_filename` must include the extension, and such a file must exist in the `audio/` folder on the server.
 
@@ -116,7 +116,27 @@ curl -O -J http://localhost:5055/generate_batch_files_async
 
 </br>
 
+#### GET `/tone/:frequency/:duration/:volume/:sample_rate`
+Plays a tone with the specified `frequency` (in Hz), `duration` (in milliseconds), `volume` (in dB, negative is posible), and `sample_rate` (in Hz) on the server. The `sample_rate` is the sample rate of the audio output device on the server. The `duration` and `sample_rate` must be positive integers.
+
+*Example request:*
+```bash
+curl http://localhost:5055/tone/440/1000/40/44100
+```
+
+</br>
+
+#### GET `/save_tone/:frequency/:duration/:volume/:sample_rate`
+Similar to [`/tone`](#get-tonefrequencydurationvolumesample_rate), but instead of playing the tone, the server will send back the tone as a `.wav` file. The file will be named with the format `{frequency}Hz_{duration}ms_{volume}dB_@{sample_rate}Hz.wav`.
+
+*Example request:*
+```bash
+curl -O -J http://localhost:5055/save_tone/440/1000/40/44100
+```
+
 ## Development and Build Instructions
+### Classic option: Build with Cargo on your Target Machine
+
 To make sure that the executable is compatible with Ubuntu 14.04, compiling the code must be done on a machine with Ubuntu 14.04. This can be done by using a virtual machine, such as [VirtualBox](https://www.virtualbox.org/) or Hyper-V. Many low level libraries such as `glibc` or `alsa` are required and dynamically linked, so building on a newer version of Ubuntu will result in a binary that is not compatible with older versions of Ubuntu.
 
 For this same reason, the version of the [rodio](https://docs.rs/rodio/0.12.0/rodio/index.html) crate used is locked at `0.12.0`. Please do not update this crate without testing on your target server OS.
@@ -129,3 +149,50 @@ cargo build --release
 ```
 
 The executable will be located at `target/release/rust-audio-server`.
+
+</br>
+
+### Better option: Build with Docker
+Instead of having to create a virtual machine and then install a bunch of different libraries required, you can also use Docker to build the executable. The included Dockerfiles in this repo will help you create a suitable Docker image for building the executable, and then compile the code inside a Docker container.
+
+#### Prerequisites
+You will need to have Docker installed on your machine. If you do not have Docker installed, you can find instructions on how to install it on the [Docker documentation page](https://docs.docker.com/engine/installation/).
+
+#### Building the Base Image
+The first step is to build the base image, which will contain all of the dependencies needed to build the code in this repository. The `Dockerfile` for this image is located in the `create_base_ubuntu_docker_image/` folder.
+
+First, navigate to the `create_base_ubuntu_docker_image/` folder:
+```bash
+cd create_base_ubuntu_docker_image
+```
+
+Then, run the following command to create the image. If you are also planning to use the image to build the code in this repository, you should also tag the image with the name `trusty-ubuntu-audio-image` (as shown below) so that the build scripts (later on) can find it.
+```bash
+docker build -t trusty-ubuntu-audio-image -f Dockerfile .
+```
+
+#### Building the Executable
+Once the base image has been created, you can use it to build the executable. The `Dockerfile` for this image is located in the root of the repository.
+
+Remember to navigate back to the root of the repository:
+```bash
+cd ..
+```
+
+Then, run the following command to create the executable. The `batch` and `shell` scripts for Windows and Linux respectively can also be used to build the project: `docker_build_ubuntu.sh` and `docker_build_windows.bat`.
+
+Or just run the following command:
+```bash
+# WINDOWS
+docker run --name audio-server-build-temp -it -v "%cd%:/app" trusty-ubuntu-audio-image sh -c "cd /app && cargo build --release --target=x86_64-unknown-linux-gnu" && docker rm audio-server-build-temp
+
+# LINUX
+docker run --name audio-server-build-temp -it -v "$(pwd):/app" trusty-ubuntu-audio-image sh -c "cd /app && cargo build --release --target=x86_64-unknown-linux-gnu" && docker rm audio-server-build-temp
+```
+
+The resulting executable will be located at `target/x86_64-unknown-linux-gnu/release/rust-audio-server`.
+
+
+
+#### Re-building the Executable
+When the code changes, you can simply re-run the command above to re-build the executable. The base Docker image (`trusty-ubuntu-audio-image`) will remain unchanged.

@@ -34,7 +34,31 @@ The default port is `5055`.
 ### Client
 The client can be run on any machine which can connect to the server via TCP.
 
-There are a few routes available for the client:
+There are a few routes available for the client. See the root route `/` for more information.
+
+
+#### GET `/`
+Some quick documentation on the available routes.
+
+</br>
+
+#### GET `/startnewlog`
+Start a new log file with the current **`UTC`** date time on the server. The response is a `json` object with the following fields:
+```json
+{
+  "message": "Started new log file: ./{YYYYMMDD-hhmmss}.csv"
+}
+```
+
+From this point on, all logs will be written to the new log file, until a new log file is started.
+
+*Example request:*
+```bash
+curl http://localhost:5055/startnewlog
+```
+
+</br>
+
 #### GET `/play/:audio_filename`
 Plays the audio file `audio_filename` on the server. The `audio_filename` must include the extension, and such a file must exist in the `audio/` folder on the server.
 
@@ -63,19 +87,44 @@ curl http://localhost:5055/play/doorbell.wav
 
 </br>
 
-#### GET `/startnewlog`
-Start a new log file with the current **`UTC`** date time on the server. The response is a `json` object with the following fields:
+#### GET `/play/random`
+Plays a random audio file in the `audio/` folder on the server. The server will display a message the moment the request is received, and log the exact time the audio file starts playing. The client will only receive a response once all the audio files have been played.
+
+Beside the `time` parameter, there are 2 other optional parameters for this route:
+
+- `file_count`: the number of files to play. The default is `100`.
+- `break_between_files`: the duration to pause between each file in milliseconds. The default is `0`.
+
+The response is a `json` object with the following fields:
 ```json
 {
-  "message": "Started new log file: ./{YYYYMMDD-hhmmss}.csv"
+  "message": "At {timestamp} started playing {file_count} random audio files. Took {duration} seconds."
 }
 ```
 
-From this point on, all logs will be written to the new log file, until a new log file is started.
+*Example request:*
+```bash
+curl "http://localhost:5055/play/random?file_count=10&break_between_files=1000"
+```
+
+</br>
+
+#### GET `/play_tone/:frequency/:duration/:volume/:sample_rate`
+Plays a pure sinewave tone with the specified `frequency` (in Hz), `duration` (in milliseconds), `volume` (in dB, negative is posible), and `sample_rate` (in Hz) on the server. The `sample_rate` is the sample rate of the audio output device on the server. The `duration` and `sample_rate` must be positive integers.
 
 *Example request:*
 ```bash
-curl http://localhost:5055/startnewlog
+curl http://localhost:5055/play_tone/440/1000/40/44100
+```
+
+</br>
+
+#### GET `/save_tone/:frequency/:duration/:volume/:sample_rate`
+Similar to [`/play_tone`](#get-play_tonefrequencydurationvolumesample_rate), but instead of playing the tone, the server will send back the tone as a `.wav` file. The file will be named with the format `{frequency}Hz_{duration}ms_{volume}dB_@{sample_rate}Hz.wav` for you to download.
+
+*Example request:*
+```bash
+curl -O -J http://localhost:5055/save_tone/440/1000/40/44100
 ```
 
 </br>
@@ -116,23 +165,32 @@ curl -O -J http://localhost:5055/generate_batch_files_async
 
 </br>
 
-#### GET `/tone/:frequency/:duration/:volume/:sample_rate`
-Plays a tone with the specified `frequency` (in Hz), `duration` (in milliseconds), `volume` (in dB, negative is posible), and `sample_rate` (in Hz) on the server. The `sample_rate` is the sample rate of the audio output device on the server. The `duration` and `sample_rate` must be positive integers.
+#### GET `playlist/create`
+Create a playlist of randomized audio files in the `audio/` folder on the server. There are 2 optional parameters for this route:
+
+- `file_count`: the number of files to include in the playlist. The default is `10`. If the number of files in the `audio/` folder is less than this number, then some will be repeated.
+- `break_between_files`: the duration to pause between each file in milliseconds. The default is `0`.
+
+The server will send back a `.txt` file containing the playlist. The file will be named with the format `playlist_{hash}_{duration}s_{number of file/steps}count.txt` for you to download. The `hash` is the first 8 characters of the `sha256` hash of the playlist content, serving as a unique identifier for the playlist.
 
 *Example request:*
 ```bash
-curl http://localhost:5055/tone/440/1000/40/44100
+curl -O -J "http://localhost:5055/playlist/create?file_count=10&break_between_files=1000"
 ```
 
 </br>
 
-#### GET `/save_tone/:frequency/:duration/:volume/:sample_rate`
-Similar to [`/tone`](#get-tonefrequencydurationvolumesample_rate), but instead of playing the tone, the server will send back the tone as a `.wav` file. The file will be named with the format `{frequency}Hz_{duration}ms_{volume}dB_@{sample_rate}Hz.wav`.
+#### GET `playlist/:playlist_filename`
+Play the playlist `playlist_filename` on the server. The `playlist_filename` must include the `.txt` extension, and such a file must exist in the `playlists/` folder on the server. The audio files in the playlist must also exist in the `audio/` folder on the server, otherwise, that playlist will be excluded.
+
+The server will display a message the moment the request is received, and log the exact time the playlist starts playing. The client will only receive a response once the playlist has finished playing.
 
 *Example request:*
 ```bash
-curl -O -J http://localhost:5055/save_tone/440/1000/40/44100
+curl http://localhost:5055/playlist/playlist_1a2b3c4d_10s_10count.txt
 ```
+
+</br>
 
 ## Development and Build Instructions
 ### Classic option: Build with Cargo on your Target Machine

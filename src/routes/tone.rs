@@ -7,12 +7,12 @@ use std::{
 use actix_web::{get, web, HttpResponse};
 use rodio::{OutputStream, Sink, Source};
 
-use crate::structs::{ResponseMessage, QueryStruct, Tone};
+use crate::structs::{ResponseMessage, TimeQuery, Tone};
 use crate::audio::{tone_to_source, tone_to_wav_file, handle_audio_error};
 use crate::LOG_FILE_NAME;
 
 #[get("/tone/{freq}/{duration}/{amplitude}/{sample_rate}")]
-async fn play_tone(tone: web::Path<Tone>, query: web::Query<QueryStruct>) -> HttpResponse {
+async fn play_tone(tone: web::Path<Tone>, query: web::Query<TimeQuery>) -> HttpResponse {
     let time_ns = std::time::SystemTime::now().duration_since(std::time::SystemTime::UNIX_EPOCH).unwrap().as_nanos();
 
     // destructure the Tone struct to get the values

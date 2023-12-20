@@ -7,13 +7,14 @@ use std::{
 
 use actix_web::HttpResponse;
 use hound;
+use rand::prelude::*;
 use rodio::{
     source::Buffered,
     Decoder,
     Source,
 };
 
-use crate::structs::ResponseMessage;
+use crate::structs::{ResponseMessage, RandomAudioQueueOptions};
 
 
 // Preload audio files to RAM for faster playback
@@ -55,6 +56,88 @@ pub fn preload_audio_files(audio_folder_path: &str) -> HashMap<String, Buffered<
     }
     println!("Preloaded {} audio files to RAM\n", files.len());
     files
+}
+
+pub enum PlaylistTypes {
+    AudioFiles(String),
+    Pause(u32),
+}
+
+// Load the .txt files in the playlists folder and validate the audio file names (make sure they exist in the audio folder)
+pub fn load_and_validate_playlists(playlists_folder_path: &str, audio_files: &HashMap<String, Buffered<Decoder<BufReader<std::fs::File>>>>) -> HashMap<String, Vec<PlaylistTypes>> {
+    // if no /playlists folder is found, return an empty HashMap
+    if !fs::metadata(playlists_folder_path).is_ok() {
+        return HashMap::new();
+    }
+
+    println!("Loading playlists...");
+
+    // Playlist: Key is the name of the file.txt, Value is a Vec of audio file names (and breaks if applicable)
+    let mut playlists: HashMap<String, Vec<PlaylistTypes>> = HashMap::new();
+
+    let paths = fs::read_dir(playlists_folder_path).unwrap();
+
+    for path in paths {
+        let path = path.unwrap().path();
+        let file_name = path.file_name().unwrap().to_str().unwrap().to_string();
+
+        // ignore files that are not .txt files
+        let extension = path.extension().unwrap().to_str().unwrap();
+        if extension != "txt" {
+            continue;
+        }
+
+        // read the file
+        let file = std::fs::File::open(path).unwrap();
+        let mut reader = BufReader::new(file);
+        let mut contents = String::new();
+        std::io::Read::read_to_string(&mut reader, &mut contents).unwrap();
+
+        // split the file contents by line
+        let lines = contents.split("\n");
+
+        // validate the audio file names: if any of the audio file names are not found in the audio folder, or not start with "pause_", then ignore the playlist
+        let mut playlist: Vec<PlaylistTypes> = Vec::new();
+        for line in lines {
+            let line = line.trim();
+
+            // ignore empty lines
+            if line == "" {
+                continue;
+            }
+
+            // if the line starts with "pause_", then it's a break
+            if line.starts_with("pause_") {
+                let break_duration = line.replace("pause_", "").replace("ms", "").parse::<u32>().unwrap();
+                playlist.push(PlaylistTypes::Pause(break_duration));
+                continue;
+            }
+
+            // if the line is not a break, then it's an audio file name
+            // check if the audio file name exists in the audio folder
+            if !audio_files.contains_key(line) {
+                println!("\x1b[2m    \x1b[31mError: Audio file \"{}\" not found\x1b[0m", line);
+                println!("Please make sure the audio file exists in the \"audio\" folder and try again.");
+                println!("Ignoring playlist \"{}\"...", file_name);
+                continue;
+            }
+
+            // if the audio file name exists in the audio folder, then add it to the playlist
+            playlist.push(PlaylistTypes::AudioFiles(line.to_string()));
+        }
+
+        // if the playlist is empty, then ignore it
+        if playlist.len() == 0 {
+            continue;
+        }
+
+        // if the playlist is not empty, then add it to the playlists HashMap
+        playlists.insert(file_name, playlist);
+    }
+
+    println!("Loaded {} playlists\n", playlists.len());
+
+    playlists
 }
 
 
@@ -130,12 +213,6 @@ pub fn tone_to_source(freq: &f32, duration: &u32, amplitude: &f32, sample_rate: 
         writer.finalize().unwrap();
     }
 
-    // write to disk for debugging
-    // let file_name = format!("{}Hz_{}ms_{}dB_@{}Hz.wav", freq, duration, amplitude, sample_rate);
-    // let mut file = std::fs::File::create(file_name).unwrap();
-    // file.write_all(&cursor.clone().into_inner()).unwrap();
-
-
     // Convert the Wav file in memory to a rodio Source
     let source = rodio::Decoder::new(BufReader::new(Cursor::new(cursor.into_inner()))).unwrap().buffered();
     source
@@ -164,4 +241,76 @@ pub fn tone_to_wav_file(freq: &f32, duration: &u32, amplitude: &f32, sample_rate
     let buffer = cursor.into_inner();
 
     buffer
+}
+
+pub fn silence_as_source(duration: &u32, sample_rate: &u32) -> Buffered<Decoder<BufReader<Cursor<Vec<u8>>>>> {
+    let silence = vec![0.0; (*duration as f32 / 1000.0 * *sample_rate as f32) as usize];
+
+    // Create the Cursor<Vec<u8>> separately
+    let mut cursor = Cursor::new(Vec::new());
+
+    // Convert the sine_tone vector to a Wav file in memory
+    let spec = hound::WavSpec {
+        channels: 1,
+        sample_rate: *sample_rate,
+        bits_per_sample: 32,
+        sample_format: hound::SampleFormat::Float,
+    };
+    {
+        let mut writer = hound::WavWriter::new(&mut cursor, spec).unwrap();
+        for sample in silence {
+            writer.write_sample(sample).unwrap();
+        }
+        writer.finalize().unwrap();
+    }
+
+    // Convert the Wav file in memory to a rodio Source
+    let source = rodio::Decoder::new(BufReader::new(Cursor::new(cursor.into_inner()))).unwrap().buffered();
+    source 
+}
+
+// a custom QueueSource struct that can hold either a Vec<Buffered<Decoder<BufReader<std::fs::File>>>> or a Vec<Buffered<Decoder<BufReader<Cursor<Vec<u8>>>>>>
+
+pub enum QueueSource {
+    AudioFile(Buffered<Decoder<BufReader<std::fs::File>>>),
+    Tone(Buffered<Decoder<BufReader<Cursor<Vec<u8>>>>>),
+}
+
+// create a random audio queue and return a valid rodio Source in a Vec to be played
+// audio files from the audio_files HashMap will be randomly selected and played
+// also take in the RandomAudioQueueOptions struct to determine how the audio queue should be generated
+// if vec i + 1 has some other files, then also need to add the break_between_files duration
+pub fn generate_random_audio_queue(audio_files: &HashMap<String, Buffered<Decoder<BufReader<std::fs::File>>>>, options: &RandomAudioQueueOptions, file_limit: u16) -> Vec<QueueSource> {
+    // only generate the queue if there are audio files
+    if audio_files.len() == 0 || file_limit == 0 {
+        return Vec::new();
+    }
+
+    let mut rng = rand::thread_rng();
+    let mut queue: Vec<QueueSource> = Vec::new();
+    let files = audio_files.keys().collect::<Vec<&String>>();
+
+    // randomly choose an audio file name from the list of audio files
+    for _ in 0..file_limit { // generate the queue up to the file limit to avoid memory issues
+        let random_audio_file_name = files.choose(&mut rng).unwrap();
+        let source = audio_files.get(*random_audio_file_name).unwrap().clone();
+        queue.push(QueueSource::AudioFile(source));
+    }
+
+    // add the break_between_files duration
+    let silence_source = silence_as_source(&options.break_between_files, &48000);
+    for i in 0..queue.len() {
+        if i + 1 < queue.len() {
+            queue.insert(i + 1, QueueSource::Tone(silence_source.clone()));
+        }
+    }
+
+    queue
+}
+
+pub fn pause_sink_duration(sink: &rodio::Sink, duration: &u32) {
+    // pause, sleep, then play
+    sink.pause();
+    std::thread::sleep(std::time::Duration::from_millis(*duration as u64));
+    sink.play();
 }

@@ -10,10 +10,10 @@ use chrono::Utc;
 use local_ip_address::local_ip;
 
 mod structs;
-use structs::AudioFiles;
+use structs::{AudioFiles, Playlists};
 
 mod audio;
-use audio::preload_audio_files;
+use audio::{preload_audio_files, load_and_validate_playlists};
 
 mod file_io;
 mod routes;
@@ -43,6 +43,11 @@ async fn main() -> std::io::Result<()> {
     // preload audio files
     let audio_files = web::Data::new(AudioFiles {
         files: preload_audio_files("./audio"),
+    });
+
+    // load playlists
+    let playlists = web::Data::new(Playlists {
+        playlists: load_and_validate_playlists("./playlists", &audio_files.files),
     });
 
     // make sure the log folder exists
@@ -77,11 +82,15 @@ async fn main() -> std::io::Result<()> {
     HttpServer::new(move || {
         App::new()
             .app_data(audio_files.clone())
+            .app_data(playlists.clone())
             .service(routes::info::index)
             .service(routes::ping::ping)
+            .service(routes::play::play_random)
             .service(routes::play::play)
             .service(routes::tone::play_tone)
             .service(routes::tone::save_tone)
+            .service(routes::playlists::create_playlist)
+            .service(routes::playlists::play)
             .service(routes::startnewlog::start_new_log)
             .service(routes::batch_files::generate_batch_files)
             .service(routes::batch_files::generate_batch_files_async)

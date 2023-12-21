@@ -58,6 +58,7 @@ pub fn preload_audio_files(audio_folder_path: &str) -> HashMap<String, Buffered<
     files
 }
 
+#[derive(Clone)]
 pub enum PlaylistTypes {
     AudioFiles(String),
     Pause(u32),
@@ -98,6 +99,8 @@ pub fn load_and_validate_playlists(playlists_folder_path: &str, audio_files: &Ha
 
         // validate the audio file names: if any of the audio file names are not found in the audio folder, or not start with "pause_", then ignore the playlist
         let mut playlist: Vec<PlaylistTypes> = Vec::new();
+        let mut error_occurred = false; // Add this flag
+
         for line in lines {
             let line = line.trim();
 
@@ -117,17 +120,18 @@ pub fn load_and_validate_playlists(playlists_folder_path: &str, audio_files: &Ha
             // check if the audio file name exists in the audio folder
             if !audio_files.contains_key(line) {
                 println!("\x1b[2m    \x1b[31mError: Audio file \"{}\" not found\x1b[0m", line);
-                println!("Please make sure the audio file exists in the \"audio\" folder and try again.");
-                println!("Ignoring playlist \"{}\"...", file_name);
-                continue;
+                println!("\x1b[2m    Please make sure the audio file exists in the \"audio\" folder and try again.\x1b[0m");
+                println!("\x1b[2m    Ignoring playlist \"{}\"...\n\x1b[0m", file_name);
+                error_occurred = true; // Set the flag to true
+                break; // Break the loop for audio in playlist
             }
 
             // if the audio file name exists in the audio folder, then add it to the playlist
             playlist.push(PlaylistTypes::AudioFiles(line.to_string()));
         }
 
-        // if the playlist is empty, then ignore it
-        if playlist.len() == 0 {
+        // if the playlist is empty or an error occurred, then ignore it
+        if playlist.len() == 0 || error_occurred {
             continue;
         }
 

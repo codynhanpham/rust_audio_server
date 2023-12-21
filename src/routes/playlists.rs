@@ -5,13 +5,16 @@ use std::{
 };
 
 use actix_web::{get, web, HttpResponse};
+
+use local_ip_address::local_ip;
+
 use rand::Rng;
 use rodio::{OutputStream, Sink, Source};
 use sha256::digest;
 
 use crate::structs::{ResponseMessage, TimeQuery, AudioFiles, PlaylistOptions, Playlists};
 use crate::audio::{handle_audio_error, pause_sink_duration, PlaylistTypes};
-use crate::LOG_FILE_NAME;
+use crate::{LOG_FILE_NAME, PLAYLISTS, PORT};
 
 
 // Create and send back a .txt file containing the playlist
@@ -71,6 +74,36 @@ async fn create_playlist(audio_files: web::Data<AudioFiles>, query: web::Query<P
     // This file name will be used as the return header
     let playlist_file_name = format!("playlist_{}_{:?}s_{}count.txt", id, total_duration as f64 / 1000.0, playlist.len());
 
+
+    // Always update the server-side playlist, then hot reload the playlists
+    // Save the new playlist to file
+    let mut file = OpenOptions::new()
+        .write(true)
+        .append(true)
+        .create(true)
+        .open(format!("./playlists/{}", &playlist_file_name))
+        .unwrap();
+
+    if let Err(e) = writeln!(file, "{}", output_string) {
+        eprintln!("Couldn't create new file: {}", e);
+    } else {
+        println!("\x1b[2m    \x1b[38;5;8mCreated new playlist file server-side: ./playlists/{}\x1b[0m", &playlist_file_name);
+    }
+
+    // Reload the playlists
+    println!(" !! Hot Reloading Playlists !!");
+    let mut playlists = PLAYLISTS.lock().unwrap();
+    *playlists = Playlists { playlists: crate::load_and_validate_playlists("./playlists", &audio_files.files) };
+    drop(playlists);
+    
+
+    // Check for playlist_options.no_download: Change the HTTP response accordingly
+    if playlist_options.no_download {
+        // If no_download is true, return a JSON response with the playlist file name
+        let message = format!("Created new playlist file server-side: ./playlists/{}. To play this new playlist, visit: http://{}:{}/playlist/{}", &playlist_file_name, local_ip().unwrap(), PORT, &playlist_file_name);
+        return HttpResponse::Ok().json(ResponseMessage { message });
+    }
+
     // Return the playlist file as a text file to download
     HttpResponse::Ok()
         .content_type("text/plain")
@@ -82,7 +115,7 @@ async fn create_playlist(audio_files: web::Data<AudioFiles>, query: web::Query<P
 
 // Play the playlist
 #[get("/playlist/{playlist_file_name}")]
-async fn play(playlist_file_name: web::Path<String>, audio_files: web::Data<AudioFiles>, available_playlists: web::Data<Playlists>, query: web::Query<TimeQuery>) -> HttpResponse {
+async fn play(playlist_file_name: web::Path<String>, audio_files: web::Data<AudioFiles>, query: web::Query<TimeQuery>) -> HttpResponse {
     let time_ns = std::time::SystemTime::now().duration_since(std::time::SystemTime::UNIX_EPOCH).unwrap().as_nanos();
     println!("{}: Received /playlist/{}", time_ns, playlist_file_name);
 
@@ -92,6 +125,8 @@ async fn play(playlist_file_name: web::Path<String>, audio_files: web::Data<Audi
         let message = format!("No audio files found");
         return HttpResponse::NotFound().json(ResponseMessage { message });
     }
+
+    let available_playlists = PLAYLISTS.lock().unwrap();
 
     // If the playlist file name is not found in the available_playlists HashMap, return 404
     if !available_playlists.playlists.contains_key(&playlist_file_name.to_string()) {
@@ -162,7 +197,9 @@ async fn play(playlist_file_name: web::Path<String>, audio_files: web::Data<Audi
 
     
     // Get the playlist from the available_playlists HashMap
-    let playlist = available_playlists.playlists.get(&playlist_file_name.to_string()).unwrap();
+    let playlist = available_playlists.playlists.get(&playlist_file_name.to_string()).unwrap().clone();
+
+    drop(available_playlists); // release the lock on global PLAYLISTS
 
     // One option here is to just append all of the audio files in the playlist to the sink
     // However, the trade off is that, we don't really know when which audio file is playing --> not as verbose

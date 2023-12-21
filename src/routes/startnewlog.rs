@@ -30,7 +30,7 @@ async fn start_new_log() -> impl Responder {
         .create(true)
         .open(format!("{}.csv", *log_file_name))
         .unwrap();
-    let mut message = format!("Started new log file: ./{}.csv", *log_file_name);
+    let mut message = format!("Started new log file: ./logs/{}.csv", *log_file_name);
     drop(log_file_name);
 
     if let Err(e) = writeln!(file, "timestamp_audio,audio_filename,status,timestamp_client") {

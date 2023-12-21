@@ -51,5 +51,6 @@ pub struct PlaylistOptions {
     #[serde(default)]
     pub file_count: u32, // number of files to play before stopping, overrides max_duration
 
-    // more to come, say, gapless playback, etc.
+    #[serde(default)] // this default to false --> download the file
+    pub no_download: bool, // don't download the file, only create the playlist server-side
 }

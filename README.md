@@ -36,9 +36,16 @@ The client can be run on any machine which can connect to the server via TCP.
 
 There are a few routes available for the client. See the root route `/` for more information.
 
+As a general note, if your request takes a long time to complete (say, play 200 audio files), the server may not response in time before the client times out. In this case, the server will still complete the request, but the client will not receive a response. The server will still log the request and response time, so you can check the logs to see if the request was successful.
+
 
 #### GET `/`
-Some quick documentation on the available routes.
+Some quick documentation on the available routes. If there are inconsistencies between the documentation and the actual routes, the actual routes take precedence. If there are inconsistencies between the the `/` route and this README, the `/` route takes precedence. (It's a bit hard to keep everything in sync, so please bear with me.)
+
+</br>
+
+#### GET `/list`
+List all audio files in the `audio/` folder and playlists in the `playlists/` folder on the server.
 
 </br>
 
@@ -46,7 +53,7 @@ Some quick documentation on the available routes.
 Start a new log file with the current **`UTC`** date time on the server. The response is a `json` object with the following fields:
 ```json
 {
-  "message": "Started new log file: ./{YYYYMMDD-hhmmss}.csv"
+  "message": "Started new log file: ./logs/{YYYYMMDD-hhmmss}.csv"
 }
 ```
 
@@ -109,7 +116,7 @@ curl "http://localhost:5055/play/random?file_count=10&break_between_files=1000"
 
 </br>
 
-#### GET `/play_tone/:frequency/:duration/:volume/:sample_rate`
+#### GET `/tone/:frequency/:duration/:volume/:sample_rate`
 Plays a pure sinewave tone with the specified `frequency` (in Hz), `duration` (in milliseconds), `volume` (in dB, negative is posible), and `sample_rate` (in Hz) on the server. The `sample_rate` is the sample rate of the audio output device on the server. The `duration` and `sample_rate` must be positive integers.
 
 *Example request:*
@@ -130,9 +137,9 @@ curl -O -J http://localhost:5055/save_tone/440/1000/40/44100
 </br>
 
 #### GET `/generate_batch_files`
-Generate batch files for all audio files in the `audio/` folder. The batch files are `.bat` files for Windows. The request will be automatically filled with the current server local IP address, and the default port `5055`.
+Generate batch files for all audio files in the `audio/` folder and validated playlists in the `playlists/` folder. The batch files are `.bat` files for Windows. The request will be automatically filled with the current server local IP address, and the default port `5055`.
 
-There will be one batch file for each audio file, and an extra `.bat` file that call the `/startnewlog` route. The request will return a `.zip` file containing all the batch files. The `.zip` file will be named with the IP address and port of the server: `{host_ip}_{port}.zip`.
+There will be one batch file for each audio file or playlist, and an extra `.bat` file that call the `/startnewlog` route. The request will return a `.zip` file containing all the batch files. The `.zip` file will be named with the IP address and port of the server: `{host_ip}_{port}.zip`.
 
 > The batch files for requesting audio have the value for the optional query `?time=` included. It automatically pull the client clock time and use it as the request time. ***The accuracy of Windows clock is only to the millisecond, so the request time will be rounded to the nearest millisecond, then times 1,000,000 for `nanoseconds`***. The same assumption as the [Note](#note) above applies for the data to be meaningful: the client and server must be synced to the same clock. ***Please ignore the `timestamp_client` column in the logs if you are unsure of the time difference between the client and server.***
 
@@ -168,7 +175,7 @@ curl -O -J http://localhost:5055/generate_batch_files_async
 #### GET `playlist/create`
 Create a playlist of randomized audio files in the `audio/` folder on the server. There are 2 optional parameters for this route:
 
-- `file_count`: the number of files to include in the playlist. The default is `10`. If the number of files in the `audio/` folder is less than this number, then some will be repeated.
+- `file_count`: the number of files to include in the playlist. The default is `10`. The selection is randomized everytime, so the same file may be included multiple times.
 - `break_between_files`: the duration to pause between each file in milliseconds. The default is `0`.
 
 The server will send back a `.txt` file containing the playlist. The file will be named with the format `playlist_{hash}_{duration}s_{number of file/steps}count.txt` for you to download. The `hash` is the first 8 characters of the `sha256` hash of the playlist content, serving as a unique identifier for the playlist.

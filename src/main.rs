@@ -19,6 +19,9 @@ mod file_io;
 mod routes;
 
 
+// Define the port number
+static PORT: u16 = 5055;
+
 
 // Define the global variable for the log file name
 // This will be updated whenever a new /startnewlog request is received
@@ -26,10 +29,14 @@ lazy_static::lazy_static! {
     static ref LOG_FILE_NAME: Arc<Mutex<String>> = Arc::new(Mutex::new(Utc::now().format("logs/log_%Y%m%d-%H%M%S").to_string()));
 }
 
-// Define the port number
-static PORT: u16 = 5055;
-
-
+// Define the global variable for the current validated playlists
+// This will allow us to update the playlists without having to restart the server (hot reload)
+lazy_static::lazy_static! {
+    static ref PLAYLISTS: Arc<Mutex<Playlists>> = Arc::new(Mutex::new(Playlists {
+        // init with empty playlists
+        playlists: std::collections::HashMap::new(),
+    }));
+}
 
 /// ---------- APP & ROUTES ---------- ///
 
@@ -37,7 +44,9 @@ static PORT: u16 = 5055;
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
-    println!(" ---------- AUDIO SERVER ----------\n");
+    println!(" --------------- AUDIO SERVER ---------------");
+    println!("The source code for this program is available at https://github.com/codynhanpham/rust_audio_server\n\n");
+
     println!("Looking for audio files in ./audio/*.wav ...");
 
     // preload audio files
@@ -45,10 +54,11 @@ async fn main() -> std::io::Result<()> {
         files: preload_audio_files("./audio"),
     });
 
-    // load playlists
-    let playlists = web::Data::new(Playlists {
-        playlists: load_and_validate_playlists("./playlists", &audio_files.files),
-    });
+    // load and validate playlists
+    let current_playlists = load_and_validate_playlists("./playlists", &audio_files.files);
+    let mut playlists = PLAYLISTS.lock().unwrap();
+    *playlists = Playlists { playlists: current_playlists }; // update playlists
+    drop(playlists); // release the lock on PLAYLISTS global
 
     // make sure the log folder exists
     fs::create_dir_all("./logs").unwrap();
@@ -82,9 +92,9 @@ async fn main() -> std::io::Result<()> {
     HttpServer::new(move || {
         App::new()
             .app_data(audio_files.clone())
-            .app_data(playlists.clone())
             .service(routes::info::index)
             .service(routes::ping::ping)
+            .service(routes::list::list)
             .service(routes::play::play_random)
             .service(routes::play::play)
             .service(routes::tone::play_tone)

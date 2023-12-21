@@ -76,6 +76,7 @@ async fn create_playlist(audio_files: web::Data<AudioFiles>, query: web::Query<P
 
 
     // Always update the server-side playlist, then hot reload the playlists
+    fs::create_dir_all("./playlists").unwrap();
     // Save the new playlist to file
     let mut file = OpenOptions::new()
         .write(true)

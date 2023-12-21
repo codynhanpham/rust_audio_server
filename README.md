@@ -173,10 +173,11 @@ curl -O -J http://localhost:5055/generate_batch_files_async
 </br>
 
 #### GET `playlist/create`
-Create a playlist of randomized audio files in the `audio/` folder on the server. There are 2 optional parameters for this route:
+Create a playlist of randomized audio files in the `audio/` folder on the server. There are 3 optional parameters for this route:
 
 - `file_count`: the number of files to include in the playlist. The default is `10`. The selection is randomized everytime, so the same file may be included multiple times.
 - `break_between_files`: the duration to pause between each file in milliseconds. The default is `0`.
+- `no_download`: either `true` or `false`. If `true`, the server will not send back the playlist file. The default is `false`. While the playlist is not sent back, it is still saved on the server, and the current available playlists are hot reloaded.
 
 The server will send back a `.txt` file containing the playlist. The file will be named with the format `playlist_{hash}_{duration}s_{number of file/steps}count.txt` for you to download. The `hash` is the first 8 characters of the `sha256` hash of the playlist content, serving as a unique identifier for the playlist.
 
